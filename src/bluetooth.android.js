@@ -57,6 +57,7 @@ Bluetooth.requestCoarseLocationPermission = function () {
  * }, ..]
  */
 Bluetooth._connections = {};
+Bluetooth._ignore = {};
 
 (function () {
 
@@ -111,35 +112,21 @@ Bluetooth._connections = {};
         console.log("------- scanCallback.onScanFailed errorMessage: " + errorMessage);
       },
       onScanResult: function (callbackType, result) {
-        var stateObject = Bluetooth._connections[result.getDevice().getAddress()];
-        if (!stateObject) {
-          Bluetooth._connections[result.getDevice().getAddress()] = {
-            state: 'disconnected'
-          };
-          var manufacturerId, manufacturerData;
-          if (result.getScanRecord().getManufacturerSpecificData().size() > 0) {
-            manufacturerId = result.getScanRecord().getManufacturerSpecificData().keyAt(0);
-            manufacturerData = Bluetooth._decodeValue(result.getScanRecord().getManufacturerSpecificData().valueAt(0));
-          }
-          var payload = {
-            type: 'scanResult', // TODO or use different callback functions?
-            UUID: result.getDevice().getAddress(),
-            name: result.getDevice().getName(),
-            RSSI: result.getRssi(),
-            state: 'disconnected',
-            advertisement: android.util.Base64.encodeToString(result.getScanRecord().getBytes(), android.util.Base64.NO_WRAP),
-            manufacturerId: manufacturerId,
-            manufacturerData: manufacturerData
-          };
-          console.log("---- Lollipop+ scanCallback result: " + JSON.stringify(payload));
-          onDiscovered(payload);
+        var manufacturerId, manufacturerData;
+        let manufacturerSpecificData = result.getScanRecord().getManufacturerSpecificData();
+        if (manufacturerSpecificData.size() > 0) {
+          manufacturerId = manufacturerSpecificData.keyAt(0);
+          manufacturerData = Bluetooth._decodeValue(manufacturerSpecificData.valueAt(0));
         }
+        let device = result.getDevice();
+        let rssi = result.getRssi();
+        Bluetooth._onDeviceScanned(device, rssi, manufacturerId, manufacturerData);
       }
     });
     Bluetooth._scanCallback = new MyScanCallback();
   } else {
 
-    function extractManufacturerRawData(scanRecord) {
+    function extractManufacturerSpecificData(scanRecord) {
       var offset = 0;
       while (offset < (scanRecord.length - 2)) {
         var len = scanRecord[offset++] & 0xff;
@@ -159,37 +146,47 @@ Bluetooth._connections = {};
     }
 
     Bluetooth._scanCallback = new android.bluetooth.BluetoothAdapter.LeScanCallback({
-      // see https://github.com/randdusing/cordova-plugin-bluetoothle/blob/master/src/android/BluetoothLePlugin.java#L2181
       onLeScan: function (device, rssi, scanRecord) {
-        var stateObject = Bluetooth._connections[device.getAddress()];
-        if (!stateObject) {
-          Bluetooth._connections[device.getAddress()] = {
-            state: 'disconnected'
-          };
-
-          var manufacturerId, manufacturerData;
-          var manufacturerDataRaw = extractManufacturerRawData(scanRecord);
-          if (manufacturerDataRaw) {
-            manufacturerId = new DataView(manufacturerDataRaw, 0).getUint16(0, true);
-            manufacturerData = manufacturerDataRaw.slice(2);
-          }
-
-          var payload = {
-            type: 'scanResult', // TODO or use different callback functions?
-            UUID: device.getAddress(), // TODO consider renaming to id (and iOS as well)
-            name: device.getName(),
-            RSSI: rssi,
-            state: 'disconnected',
-            manufacturerId: manufacturerId,
-            manufacturerData: manufacturerData
-          };
-          console.log("---- scanCallback result: " + JSON.stringify(payload));
-          onDiscovered(payload);
+        var manufacturerId, manufacturerData;
+        var manufacturerDataRaw = extractManufacturerSpecificData(scanRecord);
+        if (manufacturerDataRaw) {
+          manufacturerId = new DataView(manufacturerDataRaw, 0).getUint16(0, true);
+          manufacturerData = manufacturerDataRaw.slice(2);
         }
+        Bluetooth._onDeviceScanned(device, rssi, manufacturerId, manufacturerData);
       }
     });
   }
 })();
+
+Bluetooth._onDeviceScanned = function (device, rssi, manufacturerId, manufacturerData) {
+  let UUID = device.getAddress();
+  if (Bluetooth._ignore[UUID]) {
+    // console.log('_onDeviceScanned ignoring', UUID);
+    return;
+  }
+  let name = device.getName()
+  var stateObject = Bluetooth._connections[UUID];
+  if (!stateObject) {
+    stateObject = {
+      state: 'disconnected'
+    };
+    Bluetooth._connections[UUID] = stateObject;
+  }
+  var payload = {
+    type: 'scanResult', // TODO or use different callback functions?
+    UUID: UUID,
+    name: name,
+    RSSI: rssi,
+    state: stateObject.state,
+    manufacturerId: manufacturerId,
+    manufacturerData: manufacturerData
+  };
+  console.log("---- _onDeviceScanned: " + JSON.stringify(payload));
+  let ignore = !onDiscovered(payload);
+  // console.log('_onDeviceScanned ignore', ignore);
+  Bluetooth._ignore[UUID] = ignore;
+};
 
 // callback for connecting and read/write operations
 Bluetooth._MyGattCallback = android.bluetooth.BluetoothGattCallback.extend({
