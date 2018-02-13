@@ -5,6 +5,10 @@ var Bluetooth = require("./bluetooth-common");
 var ACCESS_COARSE_LOCATION_PERMISSION_REQUEST_CODE = 222;
 var ACTION_REQUEST_ENABLE_BLUETOOTH_REQUEST_CODE = 223;
 
+const SDK_INT = android.os.Build.VERSION.SDK_INT;
+const LOLLIPOP = 21;
+const MARSHMALLOW = 23;
+
 var adapter /* android.bluetooth.BluetoothAdapter */,
     onDiscovered,
     _onBluetoothEnabledResolve,
@@ -12,7 +16,7 @@ var adapter /* android.bluetooth.BluetoothAdapter */,
     _onPermissionGranted;
 
 Bluetooth._coarseLocationPermissionGranted = function () {
-  var hasPermission = android.os.Build.VERSION.SDK_INT < 23; // Android M. (6.0)
+  var hasPermission = SDK_INT < MARSHMALLOW;
   if (!hasPermission) {
     hasPermission = android.content.pm.PackageManager.PERMISSION_GRANTED ==
         android.support.v4.content.ContextCompat.checkSelfPermission(application.android.foregroundActivity, android.Manifest.permission.ACCESS_COARSE_LOCATION);
@@ -25,7 +29,6 @@ Bluetooth.hasCoarseLocationPermission = function () {
     resolve(Bluetooth._coarseLocationPermissionGranted());
   });
 };
-
 
 Bluetooth._requestCoarseLocationPermission = function (resolve) {
   _permissionRequestResolver = resolve;
@@ -90,7 +93,7 @@ Bluetooth._ignore = {};
   var bluetoothManager = utils.ad.getApplicationContext().getSystemService(android.content.Context.BLUETOOTH_SERVICE);
   adapter = bluetoothManager.getAdapter();
 
-  if (android.os.Build.VERSION.SDK_INT >= 21 /*android.os.Build.VERSION_CODES.LOLLIPOP */) {
+  if (SDK_INT >= LOLLIPOP) {
     var MyScanCallback = android.bluetooth.le.ScanCallback.extend({
       onBatchScanResults: function (results) {
         console.log("------- scanCallback.onBatchScanResults");
@@ -133,7 +136,7 @@ Bluetooth._ignore = {};
         if (len === 0) {
           break;
         }
-
+    
         var type = scanRecord[offset++] & 0xff;
         switch (type) {
           case 0xFF:  // Manufacturer Specific Data
@@ -144,7 +147,7 @@ Bluetooth._ignore = {};
         }
       }
     }
-
+    
     Bluetooth._scanCallback = new android.bluetooth.BluetoothAdapter.LeScanCallback({
       onLeScan: function (device, rssi, scanRecord) {
         var manufacturerId, manufacturerData;
@@ -182,7 +185,7 @@ Bluetooth._onDeviceScanned = function (device, rssi, manufacturerId, manufacture
     manufacturerId: manufacturerId,
     manufacturerData: manufacturerData
   };
-  console.log("---- _onDeviceScanned: " + JSON.stringify(payload));
+  // console.log("---- _onDeviceScanned: " + JSON.stringify(payload));
   let ignore = !onDiscovered(payload);
   // console.log('_onDeviceScanned ignore', ignore);
   Bluetooth._ignore[UUID] = ignore;
@@ -454,16 +457,7 @@ Bluetooth.startScanning = function (arg) {
           uuids.push(Bluetooth._stringToUuid(serviceUUIDs[s]));
         }
 
-        if (android.os.Build.VERSION.SDK_INT < 21 /*android.os.Build.VERSION_CODES.LOLLIPOP */) {
-          var didStart = uuids.length === 0 ?
-              adapter.startLeScan(Bluetooth._scanCallback) :
-              adapter.startLeScan(uuids, Bluetooth._scanCallback);
-          if (!didStart) {
-            // TODO error msg, see https://github.com/randdusing/cordova-plugin-bluetoothle/blob/master/src/android/BluetoothLePlugin.java#L758
-            reject("Scanning didn't start");
-            return;
-          }
-        } else {
+        if (SDK_INT >= LOLLIPOP) {
           var scanFilters = null;
           if (uuids.length > 0) {
             scanFilters = new java.util.ArrayList();
@@ -481,7 +475,7 @@ Bluetooth.startScanning = function (arg) {
           var scanMode = arg.scanMode || android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY;
           scanSettings.setScanMode(scanMode);
 
-          if (android.os.Build.VERSION.SDK_INT >= 23 /*android.os.Build.VERSION_CODES.M */) {
+          if (SDK_INT >= MARSHMALLOW) {
             var matchMode = arg.matchMode || android.bluetooth.le.ScanSettings.MATCH_MODE_AGGRESSIVE;
             scanSettings.setMatchMode(matchMode);
 
@@ -492,6 +486,15 @@ Bluetooth.startScanning = function (arg) {
             scanSettings.setCallbackType(callbackType);
           }
           adapter.getBluetoothLeScanner().startScan(scanFilters, scanSettings.build(), Bluetooth._scanCallback);
+        } else {
+          var didStart = uuids.length === 0 ?
+              adapter.startLeScan(Bluetooth._scanCallback) :
+              adapter.startLeScan(uuids, Bluetooth._scanCallback);
+          if (!didStart) {
+            // TODO error msg, see https://github.com/randdusing/cordova-plugin-bluetoothle/blob/master/src/android/BluetoothLePlugin.java#L758
+            reject("Scanning didn't start");
+            return;
+          }
         }
 
         onDiscovered = arg.onDiscovered;
@@ -499,10 +502,10 @@ Bluetooth.startScanning = function (arg) {
         if (arg.seconds) {
           setTimeout(function () {
             // note that by now a manual 'stop' may have been invoked, but that doesn't hurt
-            if (android.os.Build.VERSION.SDK_INT < 21 /* android.os.Build.VERSION_CODES.LOLLIPOP */) {
-              adapter.stopLeScan(Bluetooth._scanCallback);
-            } else {
+            if (SDK_INT >= LOLLIPOP) {
               adapter.getBluetoothLeScanner().stopScan(Bluetooth._scanCallback);
+            } else {
+              adapter.stopLeScan(Bluetooth._scanCallback);
             }
             resolve();
           }, arg.seconds * 1000);
@@ -532,10 +535,10 @@ Bluetooth.stopScanning = function () {
         reject("Bluetooth is not enabled");
         return;
       }
-      if (android.os.Build.VERSION.SDK_INT < 21 /* android.os.Build.VERSION_CODES.LOLLIPOP */) {
-        adapter.stopLeScan(Bluetooth._scanCallback);
-      } else {
+      if (SDK_INT >= LOLLIPOP) {
         adapter.getBluetoothLeScanner().stopScan(Bluetooth._scanCallback);
+      } else {
+        adapter.stopLeScan(Bluetooth._scanCallback);
       }
       resolve();
     } catch (ex) {
@@ -579,18 +582,18 @@ Bluetooth.connect = function (arg) {
         console.log("Connecting to peripheral with UUID: " + arg.UUID);
 
         var bluetoothGatt;
-        if (android.os.Build.VERSION.SDK_INT < 23 /*android.os.Build.VERSION_CODES.M */) {
+        if (SDK_INT >= MARSHMALLOW) {
           bluetoothGatt = bluetoothDevice.connectGatt(
-              utils.ad.getApplicationContext(), // context
-              false, // autoconnect
-              new Bluetooth._MyGattCallback(/* TODO pass in onWhatever function */)
+            utils.ad.getApplicationContext(), // context
+            false, // autoconnect
+            new Bluetooth._MyGattCallback(/* TODO pass in onWhatever function */),
+            android.bluetooth.BluetoothDevice.TRANSPORT_LE // 2
           );
         } else {
           bluetoothGatt = bluetoothDevice.connectGatt(
-              utils.ad.getApplicationContext(), // context
-              false, // autoconnect
-              new Bluetooth._MyGattCallback(/* TODO pass in onWhatever function */),
-              android.bluetooth.BluetoothDevice.TRANSPORT_LE // 2
+            utils.ad.getApplicationContext(), // context
+            false, // autoconnect
+            new Bluetooth._MyGattCallback(/* TODO pass in onWhatever function */)
           );
         }
 
